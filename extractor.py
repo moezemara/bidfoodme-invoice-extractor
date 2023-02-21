@@ -1,11 +1,11 @@
 import cv2
-import pytesseract
 from PIL import Image
 from pdf2image import convert_from_path
 import easyocr
 import re
 import ftp
 import os
+import json
 
 def convert_pdf_to_image(filepath):
     try:
@@ -18,7 +18,7 @@ def convert_pdf_to_image(filepath):
     for page in pages:
         i = i+1
         image_name = "images/Page_" + str(i) + ".jpg"
-        page = page.transpose(Image.Transpose.ROTATE_90)
+        #page = page.transpose(Image.Transpose.ROTATE_90)
         page.save(image_name, "JPEG")
         
     return i
@@ -29,35 +29,46 @@ def convert_image_to_pdf(images_path, invoice_number):
     for path in images_path:
         image = Image.open(path)
         RGB_image = image.convert("RGB")
-        RGB_image = RGB_image.transpose(Image.Transpose.ROTATE_270)
+        #RGB_image = RGB_image.transpose(Image.Transpose.ROTATE_270)
         converted_list.append(RGB_image)
         
     if converted_list == []: return
     
     converted_list[0].save(f'pdfs/{invoice_number}.pdf', save_all=True, append_images=converted_list[1:])
 
-def extract_text(reader, image_path):
+def is_similar_word(correct_word, check_word):
+    count = 0
+    for i in range(len(correct_word)):
+        try:
+            if correct_word[i] == check_word[i]: count += 1
+        except:
+            break
+    
+    if (count/len(correct_word))*100 > 70: return True
+
+def extract_text(reader, image_path, orientation = -1):
     invoice_number = ""
     lpo = ""
     is_valid_page = False
     is_sub_page = False
-    
-    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe'
-
-    x0 = 2371
-    y0 = 772
-    x1 = 1683
-    y1 = 731
+        
+    x0 = 2200
+    y0 = 675
+    x1 = 2100
+    y1 = 962
     
     
-    x0_title = 819
-    y0_title = 518
-    x1_title = x0_title + 1377
-    y1_title = y0_title + 311
+    
+    x0_title = 605
+    y0_title = 511
+    x1_title = x0_title + 2122
+    y1_title = y0_title + 672
     
     # load the original image
     image = cv2.imread(image_path)
     
+    if orientation != -1: image = cv2.rotate(image, orientation)
+        
     # cropping image img = image[y0:y1, x0:x1]
     cropped_image = image[y0:y0+y1, x0:x0+x1]
     title_cropped_image = image[y0_title:y1_title, x0_title:x1_title]
@@ -84,15 +95,23 @@ def extract_text(reader, image_path):
     
     result = reader.readtext(thresh1)
     
-    for value in result:        
-        if re.search("IN-[A-Z]{1,3}-[0-9]+", value[1]):
-            invoice_number = value[1]
+    # cv2.imshow("cropped", cropped_image)
+    # cv2.waitKey(0)
+    
+    for i in range(len(result)):        
+        if re.search("IN-[A-Z]{1,3}-[0-9]+", result[i][1]):
+            invoice_number = result[i][1]
+        
+        if invoice_number == "" and is_similar_word("Invoice number:", result[i][1]):
+            try:
+                invoice_number = result[i+1][1]
+            except: pass
                 
-        if "LPO" in value[1]:
-            x0 = value[0][0][0]
-            y0 = value[0][0][1]
-            x1 = value[0][1][0]
-            y1 = value[0][2][1]
+        if "LPO" in result[i][1]:
+            x0 = result[i][0][0][0]
+            y0 = result[i][0][0][1]
+            x1 = result[i][0][1][0]
+            y1 = result[i][0][2][1]
             
             if(x0 > x1): x0, x1 = x1, x0
             if(y0 > y1): y0, y1 = y1, y0
@@ -108,22 +127,27 @@ def extract_text(reader, image_path):
             for LPO_value in multiline_LPO_result:
                 lpo += LPO_value[1].replace(" ", "")
             
-            # cv2.imshow("cropped", mini_cropped_area)
+            # cv2.imshow("mini cropped", mini_cropped_area)
             # cv2.waitKey(0)
 
     if invoice_number == "" and lpo == "": is_sub_page = True
     
     return invoice_number, lpo, is_valid_page, is_sub_page
 
-def processfiles(count, filename):
+def processfiles(count):
     reader = easyocr.Reader(['en'], gpu=True) # this needs to run only once to load the model into memory
 
     extracts = []
     invoices_images = {}
+
+
+    orientation = get_correct_orientation(reader, count)
+    
+    if orientation == -2: return {}
     
     for i in range(1, count+1):
         image_path = f"images/Page_{i}.jpg"
-        invoice_number, lpo, is_valid_page, is_sub_page = extract_text(reader, image_path)
+        invoice_number, lpo, is_valid_page, is_sub_page = extract_text(reader, image_path, orientation)
         extract = {"Page": i, "invoice_number": invoice_number, "lpo": lpo, "is_valid_page": is_valid_page, "is_sub_page": is_sub_page}
         extracts.append(extract)        
 
@@ -210,7 +234,7 @@ def processfiles(count, filename):
             difference = 0
         else: continue
 
-
+    error_list = []
     for i in range(len(extracts)):
         if not extracts[i]["is_valid_page"] or extracts[i]["is_sub_page"]:
             continue
@@ -221,8 +245,9 @@ def processfiles(count, filename):
         if len(invoice_number) == correct_invoice_length and correct_company_code in invoice_number and len(numbers_match[0]) == correct_sequence_digits:
             continue
         else:
-            invoice_number = correct_company_code + str(sequence_list[i])
-            extracts[i]["invoice_number"] = invoice_number
+            #invoice_number = correct_company_code + str(sequence_list[i]) + str("_err")
+            error_list.append({"invoice_number": extracts[i]["invoice_number"], "page_number": i})
+            extracts[i]["invoice_number"] = extracts[i]["invoice_number"] + str("_err")
             continue
     
     
@@ -240,7 +265,7 @@ def processfiles(count, filename):
             invoices_images[current_invoice].append(f"images/Page_{page_id}.jpg")
     print(invoices_images)
 
-    return invoices_images
+    return invoices_images, error_list
     
 def emptyfiles():
     dirs = ["images", "pdfs"]
@@ -248,15 +273,63 @@ def emptyfiles():
         for f in os.listdir(directory):
             os.remove(os.path.join(directory, f))
 
-def start():    
+def is_correct_orientation(reader, image_path, orientation = -1):
+    x0_title = 605
+    y0_title = 511
+    x1_title = x0_title + 2122
+    y1_title = y0_title + 672
+        
+    # load the original image
+    image = cv2.imread(image_path)
+    
+    if orientation != -1: 
+        image = cv2.rotate(image, orientation)
+    
+    # cv2.imshow("image", image)
+    # cv2.waitKey(0)
+    
+    
+    title_cropped_image = image[y0_title:y1_title, x0_title:x1_title]
+    
+    
+    
+    ret,thresh_title = cv2.threshold(title_cropped_image,120,255,cv2.THRESH_BINARY)
+    
+    result_title = reader.readtext(image= thresh_title, paragraph = True)
+    title = "TAX INVOICE / DELIVERY NOTE"
+    
+    for value in result_title:
+        if ("TAX" in value[1] or "DELIVERY NOTE" in value[1]):
+            return True
+            
+    return False
+
+def get_correct_orientation(reader, count):
+    orientations = [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]
+    
+    for i in range(1, count+1):
+        image_path = f"images/Page_{i}.jpg"
+        if not is_correct_orientation(reader, image_path):
+            for orientation in orientations:
+                if is_correct_orientation(reader, image_path, orientation=orientation): return orientation
+        else: return -1
+    return -2
+
+def save_error_list(error_list):
+    with open("pdfs/errors.json", "w") as outfile:
+        json.dump(error_list, outfile, indent=4, sort_keys=True)
+      
+def start():
     ftpclient = ftp.FTP_CLIENT()
     full_files = ftpclient.download()
     ftpclient.disconnect()
 
     if len(full_files) == 0: return
+    
     for full_filename in full_files:
+        foldername = full_filename.split(".pdf")[0]
         count = convert_pdf_to_image(f"downloads/{full_filename}")
-        invoices_images = processfiles(count, full_filename)
+        invoices_images, error_list = processfiles(count)
         ftpclient.connect()
 
         for key, value in invoices_images.items():
@@ -264,12 +337,16 @@ def start():
                 continue
             convert_image_to_pdf(value, key) # key is invoice number
 
+        if error_list != []:
+            
+            save_error_list(error_list)
+            ftpclient.upload("errors.json", foldername)
+
         for key, value in invoices_images.items():
             if value == "" or key == "":
                 continue
             filename = f"{key}.pdf"
-            foldername = full_filename.split(".")[0]
-            #ftpclient.upload(filename, foldername)
-        #ftpclient.delete(filename)
+            ftpclient.upload(filename, foldername)
+        ftpclient.delete(filename)
         ftpclient.disconnect()
-        #emptyfiles()
+        emptyfiles()

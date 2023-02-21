@@ -59,11 +59,11 @@ class FTP_CLIENT:
         if not self.ftp: return
         
         try:
-            self.ftp.mkd(f"{self.base_location}/{directory}")
+            self.ftp.mkd(f"{self.base_location}/Processed/{directory}")
         except:
             pass
         
-        self.ftp.cwd(f"{self.base_location}/{directory}")
+        self.ftp.cwd(f"{self.base_location}/Processed/{directory}")
         
         with open(f"pdfs/{filename}","rb") as file:
             self.ftp.storbinary(f"STOR {filename}", file) 
