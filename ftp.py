@@ -55,21 +55,28 @@ class FTP_CLIENT:
         print("Files saved successfully")
         return files
     
-    def upload(self, filename, directory):
+    def upload(self, filename, local_location, directory):
         if not self.ftp: return
         
+        # try:
+        #     self.ftp.mkd(f"{self.base_location}/Processed/{directory}")
+        # except:
+        #     pass
+        
+        self.ftp.cwd(f"{self.base_location}/{directory}/")
+        
         try:
-            self.ftp.mkd(f"{self.base_location}/Processed/{directory}")
+            with open(f"{local_location}/{filename}","rb") as file:
+                self.ftp.storbinary(f"STOR {filename}", file)
         except:
+            print(f"Could not uploade File: {filename}")
             pass
-        
-        self.ftp.cwd(f"{self.base_location}/Processed/{directory}")
-        
-        with open(f"pdfs/{filename}","rb") as file:
-            self.ftp.storbinary(f"STOR {filename}", file) 
         
         print(f"File: {filename} uploaded successfully")
          
+    def move(self, filename, source, destination):
+        self.ftp.cwd(f"{self.base_location}/{source}/")
+        self.ftp.rename(filename, f"{self.base_location}/{destination}/{filename}")
 
     def delete(self, filename):
         self.ftp.cwd(f"{self.base_location}")
@@ -77,7 +84,3 @@ class FTP_CLIENT:
             self.ftp.delete(filename)
         except:
             print(f"Error deleting file: {filename}")
-
-def main():
-    client = FTP_CLIENT()
-    client.delete("test.txt")
