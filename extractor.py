@@ -134,6 +134,9 @@ def extract_text(reader, image_path, orientation = -1):
     
     return invoice_number, lpo, is_valid_page, is_sub_page
 
+def add(x, y) -> str:
+   return str(int(x) + int(y)).zfill(max(len(x), len(y)))
+
 def processfiles(count):
     reader = easyocr.Reader(['en'], gpu=True) # this needs to run only once to load the model into memory
 
@@ -174,13 +177,13 @@ def processfiles(count):
             sequence_list.append(-1)
             continue
         else:
-            if int(numbers_match[0]) in sequence_list:
+            if numbers_match[0] in sequence_list:
                 extracts[index]["invoice_number"] = ""
-                extracts[sequence_list.index(int(numbers_match[0]))]["invoice_number"] = ""
+                extracts[sequence_list.index(numbers_match[0])]["invoice_number"] = ""
                 sequence_list.append(-1)
-                sequence_list[sequence_list.index(int(numbers_match[0]))] = -1
+                sequence_list[sequence_list.index(numbers_match[0])] = -1
             else:
-                sequence_list.append(int(numbers_match[0]))
+                sequence_list.append(numbers_match[0])
         
         if match == []: continue
         
@@ -212,21 +215,21 @@ def processfiles(count):
     for i in range(len(sequence_list)):
         if sequence_list[i] == -2 : continue
         
-        if len(str(sequence_list[i])) == correct_sequence_digits:
+        if len(sequence_list[i]) == correct_sequence_digits:
             last_correct = sequence_list[i]
             last_correct_index = i
             continue
         
-        if len(str(sequence_list[i])) != correct_sequence_digits or sequence_list[i] == -1:
+        if len(sequence_list[i]) != correct_sequence_digits or sequence_list[i] == -1:
             last_non_correct_indexes.append(i)
             difference += 1
         
         if last_correct != -1 and last_non_correct_indexes != []:
             for index in last_non_correct_indexes:
                 if index < last_correct_index:
-                    sequence_list[index] = last_correct + difference
+                    sequence_list[index] = add(last_correct, str(difference)) #last_correct + difference
                 else:
-                    sequence_list[index] = last_correct - difference
+                    sequence_list[index] = add(last_correct, str(-difference)) #last_correct - difference
                 last_correct = sequence_list[i]
                 last_correct_index = i
                 difference -= 1
@@ -245,9 +248,10 @@ def processfiles(count):
         if len(invoice_number) == correct_invoice_length and correct_company_code in invoice_number and len(numbers_match[0]) == correct_sequence_digits:
             continue
         else:
-            #invoice_number = correct_company_code + str(sequence_list[i]) + str("_err")
-            error_list.append({"invoice_number": extracts[i]["invoice_number"], "page_number": i})
-            extracts[i]["invoice_number"] = extracts[i]["invoice_number"] + str("_err")
+            orig_invoice = invoice_number
+            invoice_number = correct_company_code + sequence_list[i]
+            error_list.append({"invoice_number": invoice_number, "original_invoice": orig_invoice, "page_number": extracts[i]["Page"]})
+            extracts[i]["invoice_number"] = invoice_number
             continue
     
     
@@ -315,18 +319,20 @@ def get_correct_orientation(reader, count):
         else: return -1
     return -2
 
-def save_error_list(error_list):
-    with open("pdfs/errors.json", "w") as outfile:
+def save_error_list(name, error_list):
+    with open(f"logs/{name}.json", "w") as outfile:
         json.dump(error_list, outfile, indent=4, sort_keys=True)
       
 def start():
     ftpclient = ftp.FTP_CLIENT()
+        
     full_files = ftpclient.download()
     ftpclient.disconnect()
 
     if len(full_files) == 0: return
-    
+
     for full_filename in full_files:
+        emptyfiles()
         foldername = full_filename.split(".pdf")[0]
         count = convert_pdf_to_image(f"downloads/{full_filename}")
         invoices_images, error_list = processfiles(count)
@@ -338,15 +344,13 @@ def start():
             convert_image_to_pdf(value, key) # key is invoice number
 
         if error_list != []:
-            
-            save_error_list(error_list)
-            ftpclient.upload("errors.json", foldername)
+            save_error_list(foldername, error_list)
+            ftpclient.upload(f"{foldername}.json", "logs", "Logs")
 
         for key, value in invoices_images.items():
             if value == "" or key == "":
                 continue
             filename = f"{key}.pdf"
-            ftpclient.upload(filename, foldername)
-        ftpclient.delete(filename)
+            ftpclient.upload(filename, "pdfs", "Processed")
+        ftpclient.move(filename = full_filename, source = "", destination = "Archived")
         ftpclient.disconnect()
-        emptyfiles()
