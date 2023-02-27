@@ -6,6 +6,7 @@ import re
 import ftp
 import os
 import json
+import config
 
 def convert_pdf_to_image(filepath):
     try:
@@ -46,6 +47,32 @@ def is_similar_word(correct_word, check_word):
     
     if (count/len(correct_word))*100 > 70: return True
 
+def best_match_base(invoice):
+    base_pattern = r"IN-[A-Z0-9-]{2,4}"
+    invoice = invoice.upper()
+    match = re.findall(base_pattern, invoice)
+    
+    if match == []: return False
+    
+    incorrect_base = match[0]
+    
+    base_scores = {}
+    for base in config.bases:
+        count = 0
+        for i in range(len(base)):
+            try:
+                if base[i] == incorrect_base[i]:
+                    count += 1
+            except:
+                break
+        
+        base_scores[base] = (count/len(base))*100
+
+    return max(base_scores, key=base_scores.get)
+            
+def add(x, y) -> str:
+    return str(int(x) + int(y)).zfill(max(len(x), len(y)))
+   
 def extract_text(reader, image_path, orientation = -1):
     invoice_number = ""
     lpo = ""
@@ -133,9 +160,6 @@ def extract_text(reader, image_path, orientation = -1):
     if invoice_number == "" and lpo == "": is_sub_page = True
     
     return invoice_number, lpo, is_valid_page, is_sub_page
-
-def add(x, y) -> str:
-   return str(int(x) + int(y)).zfill(max(len(x), len(y)))
 
 def processfiles(count):
     reader = easyocr.Reader(['en'], gpu=True) # this needs to run only once to load the model into memory
@@ -244,14 +268,23 @@ def processfiles(count):
         
         invoice_number = extracts[i]["invoice_number"]
         numbers_match = re.findall(invoice_number_pattern, invoice_number)
-        
+
         if len(invoice_number) == correct_invoice_length and correct_company_code in invoice_number and len(numbers_match[0]) == correct_sequence_digits:
             continue
         else:
+            correct_base = best_match_base(invoice_number)
             orig_invoice = invoice_number
-            invoice_number = correct_company_code + sequence_list[i]
-            error_list.append({"invoice_number": invoice_number, "original_invoice": orig_invoice, "page_number": extracts[i]["Page"]})
+            
+            if correct_base:
+                invoice_number = correct_base + sequence_list[i]
+            else:
+                invoice_number = correct_company_code + sequence_list[i]
+            
             extracts[i]["invoice_number"] = invoice_number
+            
+            if invoice_number == orig_invoice: continue
+            
+            error_list.append({"invoice_number": invoice_number, "original_invoice": orig_invoice, "page_number": extracts[i]["Page"]})
             continue
     
     
