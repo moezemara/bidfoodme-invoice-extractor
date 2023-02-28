@@ -7,6 +7,7 @@ import ftp
 import os
 import json
 import config
+import gvision
 
 def convert_pdf_to_image(filepath):
     try:
@@ -57,7 +58,7 @@ def best_match_base(invoice):
     incorrect_base = match[0]
     
     base_scores = {}
-    for base in config.bases:
+    for base in config.bases["full_bases"]:
         count = 0
         for i in range(len(base)):
             try:
@@ -191,21 +192,21 @@ def processfiles(count):
     
     for index in range(len(extracts)):
         if not extracts[index]["is_valid_page"] or extracts[index]["is_sub_page"]:
-            sequence_list.append(-2)
+            sequence_list.append("-2")
             continue
         
         match = re.findall(company_code_pattern, extracts[index]["invoice_number"])
         numbers_match = re.findall(invoice_number_pattern, extracts[index]["invoice_number"])
                 
         if numbers_match == []: 
-            sequence_list.append(-1)
+            sequence_list.append("-1")
             continue
         else:
             if numbers_match[0] in sequence_list:
                 extracts[index]["invoice_number"] = ""
                 extracts[sequence_list.index(numbers_match[0])]["invoice_number"] = ""
-                sequence_list.append(-1)
-                sequence_list[sequence_list.index(numbers_match[0])] = -1
+                sequence_list.append("-1")
+                sequence_list[sequence_list.index(numbers_match[0])] = "-1"
             else:
                 sequence_list.append(numbers_match[0])
         
@@ -237,14 +238,14 @@ def processfiles(count):
     
     difference = 0
     for i in range(len(sequence_list)):
-        if sequence_list[i] == -2 : continue
+        if sequence_list[i] == "-2" : continue
         
         if len(sequence_list[i]) == correct_sequence_digits:
             last_correct = sequence_list[i]
             last_correct_index = i
             continue
         
-        if len(sequence_list[i]) != correct_sequence_digits or sequence_list[i] == -1:
+        if len(sequence_list[i]) != correct_sequence_digits or sequence_list[i] == "-1":
             last_non_correct_indexes.append(i)
             difference += 1
         
@@ -261,32 +262,47 @@ def processfiles(count):
             difference = 0
         else: continue
 
+    logs = {}
     error_list = []
+    gvision_client = gvision.GVision()
+    gvision_uses = 0
+    
     for i in range(len(extracts)):
         if not extracts[i]["is_valid_page"] or extracts[i]["is_sub_page"]:
             continue
         
         invoice_number = extracts[i]["invoice_number"]
         numbers_match = re.findall(invoice_number_pattern, invoice_number)
-
-        if len(invoice_number) == correct_invoice_length and correct_company_code in invoice_number and len(numbers_match[0]) == correct_sequence_digits:
+        page_num = extracts[i]["Page"]
+        
+        if numbers_match != [] and len(invoice_number) == correct_invoice_length and correct_company_code in invoice_number and len(numbers_match[0]) == correct_sequence_digits:
             continue
         else:
             correct_base = best_match_base(invoice_number)
             orig_invoice = invoice_number
             
-            if correct_base:
-                invoice_number = correct_base + sequence_list[i]
+            if correct_base and numbers_match != [] and len(numbers_match[0]) == correct_sequence_digits:
+                invoice_number = correct_base + numbers_match[0]
             else:
-                invoice_number = correct_company_code + sequence_list[i]
-            
+                ## try gvision
+                gvision_invoice = gvision_client.detect_text(f"images/Page_{page_num}.jpg")
+                if gvision_invoice: 
+                    invoice_number = gvision_invoice
+                    gvision_uses += 1
+                    extracts[i]["invoice_number"] = invoice_number
+                    continue
+                else:
+                    invoice_number = correct_company_code + sequence_list[i]
+                
             extracts[i]["invoice_number"] = invoice_number
             
-            if invoice_number == orig_invoice: continue
+            if orig_invoice == invoice_number: continue
             
-            error_list.append({"invoice_number": invoice_number, "original_invoice": orig_invoice, "page_number": extracts[i]["Page"]})
+            error_list.append({"invoice_number": invoice_number, "original_invoice": orig_invoice, "page_number": page_num})
             continue
     
+    if gvision_uses != 0:   logs["gvision_uses"] = gvision_uses
+    if error_list != []: logs["errors"] = error_list
     
     for extract in extracts:
         if not extract["is_valid_page"]:
@@ -302,7 +318,7 @@ def processfiles(count):
             invoices_images[current_invoice].append(f"images/Page_{page_id}.jpg")
     print(invoices_images)
 
-    return invoices_images, error_list
+    return invoices_images, logs
     
 def emptyfiles():
     dirs = ["images", "pdfs"]
@@ -352,23 +368,26 @@ def get_correct_orientation(reader, count):
         else: return -1
     return -2
 
-def save_error_list(name, error_list):
+def save_logs(name, logs):
     with open(f"logs/{name}.json", "w") as outfile:
-        json.dump(error_list, outfile, indent=4, sort_keys=True)
+        json.dump(logs, outfile, indent=4, sort_keys=True)
       
 def start():
     ftpclient = ftp.FTP_CLIENT()
         
-    full_files = ftpclient.download()
-    ftpclient.disconnect()
+    # full_files = ftpclient.download()
+    # ftpclient.disconnect()
 
+    full_files = ["doc10969720230225131356.pdf"]
+    
     if len(full_files) == 0: return
-
+    
     for full_filename in full_files:
-        emptyfiles()
+        #emptyfiles()
         foldername = full_filename.split(".pdf")[0]
-        count = convert_pdf_to_image(f"downloads/{full_filename}")
-        invoices_images, error_list = processfiles(count)
+        #count = convert_pdf_to_image(f"downloads/{full_filename}")
+        count = 44
+        invoices_images, logs = processfiles(count)
         ftpclient.connect()
 
         for key, value in invoices_images.items():
@@ -376,8 +395,8 @@ def start():
                 continue
             convert_image_to_pdf(value, key) # key is invoice number
 
-        if error_list != []:
-            save_error_list(foldername, error_list)
+        if logs != []:
+            save_logs(foldername, logs)
             ftpclient.upload(f"{foldername}.json", "logs", "Logs")
 
         for key, value in invoices_images.items():
@@ -387,3 +406,5 @@ def start():
             ftpclient.upload(filename, "pdfs", "Processed")
         ftpclient.move(filename = full_filename, source = "", destination = "Archived")
         ftpclient.disconnect()
+
+start()
