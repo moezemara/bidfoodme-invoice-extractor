@@ -375,18 +375,15 @@ def save_logs(name, logs):
 def start():
     ftpclient = ftp.FTP_CLIENT()
         
-    # full_files = ftpclient.download()
-    # ftpclient.disconnect()
-
-    full_files = ["doc10969720230225131356.pdf"]
+    full_files = ftpclient.download()
+    ftpclient.disconnect()
     
     if len(full_files) == 0: return
     
     for full_filename in full_files:
-        #emptyfiles()
+        emptyfiles()
         foldername = full_filename.split(".pdf")[0]
-        #count = convert_pdf_to_image(f"downloads/{full_filename}")
-        count = 44
+        count = convert_pdf_to_image(f"downloads/{full_filename}")
         invoices_images, logs = processfiles(count)
         ftpclient.connect()
 
@@ -406,5 +403,3 @@ def start():
             ftpclient.upload(filename, "pdfs", "Processed")
         ftpclient.move(filename = full_filename, source = "", destination = "Archived")
         ftpclient.disconnect()
-
-start()
